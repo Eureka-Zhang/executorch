@@ -64,10 +64,11 @@ def to_espnn_edge(
 
 
 def get_operator_library_report(edge: EdgeProgramManager) -> dict:
-    """Count direct ESP-NN operators and list portable compute across methods."""
+    """Report ESP-NN compute, portable compute, layout copies and Q/DQ by method."""
     esp_nn_ops = 0
     cpu_ops = []
     layout_ops = []
+    quantization_ops = []
     for method in sorted(edge.methods):
         for node in edge.exported_program(method).graph.nodes:
             if node.op != "call_function" or node.target in (operator.getitem, alloc):
@@ -78,45 +79,34 @@ def get_operator_library_report(edge: EdgeProgramManager) -> dict:
                 ops = layout_ops
                 target = "executorch.exir.memory.view"
             elif isinstance(target, (EdgeOpOverload, OpOverload)):
-                if target._schema.name == "aten::permute_copy":
-                    dims = list(node.args[1])
-                    neighbors = (
-                        [node.args[0]]
-                        if dims == [0, 3, 1, 2]
-                        else list(node.users) if dims == [0, 2, 3, 1] else []
-                    )
-                    if any(
-                        isinstance(neighbor.target, (EdgeOpOverload, OpOverload))
-                        and neighbor.target._schema.name
-                        in {
-                            "esp_nn::quantized_max_pool2d_int8",
-                            "esp_nn::quantized_avg_pool2d_int8",
-                            "esp_nn::quantized_conv2d_int8",
-                            "esp_nn::quantized_depthwise_conv2d_int8",
-                        }
-                        for neighbor in neighbors
-                    ):
-                        layout_ops.append(
-                            {
-                                "method": method,
-                                "name": node.name,
-                                "target": target.name(),
-                            }
-                        )
-                        continue
+                if target.namespace == "esp_nn":
+                    esp_nn_ops += 1
+                    continue
                 if target._schema.name in {
+                    "aten::alias_copy",
+                    "aten::clone",
+                    "aten::permute_copy",
+                    "aten::squeeze_copy",
+                    "aten::transpose_copy",
+                    "aten::unsqueeze_copy",
+                    "aten::view_copy",
+                }:
+                    ops = layout_ops
+                elif target._schema.name in {
                     "quantized_decomposed::quantize_per_tensor",
                     "quantized_decomposed::dequantize_per_tensor",
                     "quantized_decomposed::quantize_per_channel",
                     "quantized_decomposed::dequantize_per_channel",
                 }:
-                    continue
-                if target.namespace == "esp_nn":
-                    esp_nn_ops += 1
-                    continue
+                    ops = quantization_ops
                 target = target.name()
             ops.append({"method": method, "name": node.name, "target": str(target)})
-    return {"esp_nn_ops": esp_nn_ops, "cpu_ops": cpu_ops, "layout_ops": layout_ops}
+    return {
+        "esp_nn_ops": esp_nn_ops,
+        "cpu_ops": cpu_ops,
+        "layout_ops": layout_ops,
+        "quantization_ops": quantization_ops,
+    }
 
 
 def _require_no_portable_compute(edge: EdgeProgramManager) -> list:
@@ -144,7 +134,9 @@ def get_esp_fused_quant_recipe(
 
     Use with executorch.export.export(). Supported Fused Quant operators become
     direct ESP-NN calls; other operators decompose to portable kernels. Setting
-    allow_cpu_fallback=False rejects remaining compute, excluding Q/DQ and required NHWC layout copies.
+    allow_cpu_fallback=False rejects remaining compute. Q/DQ and layout copies,
+    including user-authored permutations and shape changes, are accepted and
+    reported separately.
     Set target and kernel_mode to match the device's ESP-NN configuration
     when planning scratch.
     Use EspNNQuantizer and to_espnn_edge for the EspNNBackend delegate.
