@@ -283,8 +283,9 @@ def test_operator_library_reports_all_methods():
         (MultiplyAndFloatUsers(), (torch.linspace(-1, 1, 6), torch.linspace(-2, 2, 6))),
         (MultiplyWithConstants(), (torch.linspace(-1, 1, 6), torch.linspace(-2, 2, 6))),
         (torch.nn.MaxPool2d(2), (torch.linspace(-1, 1, 140).reshape(1, 4, 5, 7),)),
+        (torch.nn.AvgPool2d(2), (torch.linspace(-1, 1, 100).reshape(1, 4, 5, 5),)),
     ],
-    ids=["multiply", "constants", "maxpool"],
+    ids=["multiply", "constants", "maxpool", "avgpool"],
 )
 def test_lowering_is_isolated_and_idempotent(model, inputs):
     tester = EspTester(model, inputs).export_fused_quant().to_edge()
@@ -314,10 +315,11 @@ def test_lowering_is_isolated_and_idempotent(model, inputs):
     tester.to_executorch().serialize()
 
 
-def test_strict_export_accepts_and_reports_required_layout_copies():
+@pytest.mark.parametrize("pool", [torch.nn.MaxPool2d, torch.nn.AvgPool2d])
+def test_strict_export_accepts_and_reports_required_layout_copies(pool):
     session = export(
-        torch.nn.MaxPool2d(2),
-        example_inputs=[(torch.linspace(-1, 1, 140).reshape(1, 4, 5, 7),)],
+        pool(2),
+        example_inputs=[(torch.linspace(-1, 1, 100).reshape(1, 4, 5, 5),)],
         export_recipe=get_esp_fused_quant_recipe(allow_cpu_fallback=False),
     )
     report = get_operator_library_report(session.get_edge_program_manager())
@@ -355,10 +357,8 @@ def test_strict_export_rejects_portable_pool():
     [
         (torch.nn.Conv1d(4, 8, 3), (1, 4, 9)),
         (torch.nn.Conv2d(4, 8, 3), (1, 4, 7, 9)),
-        (torch.nn.AvgPool2d(2), (1, 4, 7, 9)),
-        (torch.nn.AvgPool2d(2), (4, 7, 9)),
     ],
-    ids=["conv1d", "conv2d", "avgpool", "unbatched_avgpool"],
+    ids=["conv1d", "conv2d"],
 )
 def test_other_spatial_operators_remain_portable(model, shape):
     inputs = (torch.linspace(-1, 1, math.prod(shape)).reshape(shape),)
