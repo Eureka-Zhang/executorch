@@ -107,8 +107,8 @@ class _EspFusedQuantizer(FusedQuantQuantizer):
     Conv2d, and depthwise Conv2d biases use
     int32 with scales derived from the input and weight observers.
     AvgPool2d without divisor_override shares input and output qparams.
-    Single-consumer binary/ReLU or HardTanh (including ReLU6) patterns observe
-    only their boundaries.
+    Single-consumer binary or linear followed by ReLU or HardTanh (including
+    ReLU6) patterns observe only their boundaries.
     EspPassManager lowers supported Fused Quant operators to ESP-NN and
     decomposes the rest for portable execution. Use EspNNQuantizer for the
     EspNNBackend delegate instead.
@@ -163,16 +163,19 @@ class _EspFusedQuantizer(FusedQuantQuantizer):
                     torch.ops.aten.add.Tensor,
                     torch.ops.aten.sub.Tensor,
                     torch.ops.aten.mul.Tensor,
+                    torch.ops.aten.linear.default,
                 )
                 or len(producer.users) != 1
-                or not isinstance(get_arg(producer, "other"), torch.fx.Node)
                 or Q_ANNOTATION_KEY in producer.meta
                 or Q_ANNOTATION_KEY in activation.meta
             ):
                 continue
-            if (
-                producer.target != torch.ops.aten.mul.Tensor
-                and get_arg(producer, "alpha") != 1
+            if producer.target != torch.ops.aten.linear.default and (
+                not isinstance(get_arg(producer, "other"), torch.fx.Node)
+                or (
+                    producer.target != torch.ops.aten.mul.Tensor
+                    and get_arg(producer, "alpha") != 1
+                )
             ):
                 continue
             groups.append((producer, activation))
