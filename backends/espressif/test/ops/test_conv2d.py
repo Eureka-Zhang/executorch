@@ -333,6 +333,28 @@ def test_convolution_falls_back_without_sizing(monkeypatch, missing):
         )
 
 
+def test_convolution_falls_back_when_sizing_rejects_bounds(s3_queries):
+    with pytest.raises(ValueError, match="scratch query intermediates"):
+        s3_queries.conv2d_scratch_size(
+            input_dims=(1, 1, 32768),
+            filter_dims=(1, 1, 32768),
+            output_dims=(1, 1, 2),
+            stride=(1, 1),
+            padding=(0, 0),
+        )
+    model = EspConv2d(32768, 2, 1, supported=False)
+    inputs = (ramp_tensor(-3, 5, (1, 32768, 1, 1)),)
+    EspTester(model, inputs).test_dialect(
+        model.ops_before_transforms, model.ops_after_transforms, atol=0, rtol=0
+    ).to_executorch().serialize()
+    with pytest.raises(RuntimeError, match="aten::convolution"):
+        export(
+            model,
+            example_inputs=[inputs],
+            export_recipe=get_esp_fused_quant_recipe(allow_cpu_fallback=False),
+        )
+
+
 def test_implementation_conv2d_undersized_scratch(pytestconfig, s3_queries):
     if not os.environ.get("ESPRESSIF_BUILD_DIR"):
         pytest.skip("Set ESPRESSIF_BUILD_DIR to the ESP32-S3 build directory")
